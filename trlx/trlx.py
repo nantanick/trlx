@@ -43,8 +43,10 @@ def train(  # noqa: C901
             Giving a single string `s` for the sample is a shorthand for (`tokenizer.bos_token`, `s`)
         rewards (List[float]):
             List of real numbers measuring the goodness of each sample
-        prompts (List[str]): Prompts to use for generations during online training
-        eval_prompts (List[str]): Prompts to use for periodical validation of training
+        prompts (`List[str]` or `List[Dict[str, Any]]`): Prompts to use for generations during online training.
+            If a dict is passed as prompt, it must have a required key `"prompt"`, all the extra keys would be
+            passed along the generation for that prompt as a keyword argument to reward function.
+        eval_prompts (List[str] or `List[Dict[str, Any]]`): Prompts to use for periodical validation of training
         metric_fn (Optional[Callable[[List[str], List[str], List[str]], Dict[str, List[float]]]]):
             Function to compute statistics on batches of generated samples. Its arguments are the same
             as in `reward_fn` (`samples`, `prompts`, `outputs`) but the return is dictionary with keys
@@ -92,7 +94,9 @@ def train(  # noqa: C901
         if eval_prompts is None:
             eval_prompts = prompts[:batch_size]
 
-        pipeline = get_pipeline(config.train.pipeline)(prompts, max_prompt_length, trainer.tokenizer)
+        pipeline = get_pipeline(config.train.pipeline)(
+            prompts, max_prompt_length, trainer.tokenizer, add_special_tokens=config.model.model_arch_type == "seq2seq"
+        )
         trainer.add_prompt_pipeline(pipeline)
 
         if eval_prompts is None:
@@ -102,22 +106,23 @@ def train(  # noqa: C901
 
     # Offline training from the collected samples (e.g. SFT, ILQL)
     elif samples:
-        if rewards:
+        if rewards is not None:
             if len(samples) != len(rewards):
                 raise ValueError(f"Number of samples {len(samples)} should match the number of rewards {len(rewards)}")
 
         if eval_prompts is None:
             eval_prompts = [trainer.tokenizer.bos_token] * batch_size
 
-        if rewards:
+        if rewards is not None:
             trainer.make_experience(samples, rewards, config.train.seq_length)
         else:
-            trainer.store = get_pipeline(config.train.pipeline)(samples, max_prompt_length, trainer.tokenizer)
-
+            trainer.make_experience(samples, config.train.seq_length)
     else:
         raise ValueError("Either `samples` or `reward_fn` should be given for training")
 
-    eval_pipeline = get_pipeline(config.train.pipeline)(eval_prompts, max_prompt_length, trainer.tokenizer)
+    eval_pipeline = get_pipeline(config.train.pipeline)(
+        eval_prompts, max_prompt_length, trainer.tokenizer, add_special_tokens=config.model.model_arch_type == "seq2seq"
+    )
     trainer.add_eval_pipeline(eval_pipeline)
 
     trainer.learn()
